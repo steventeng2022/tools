@@ -13,6 +13,7 @@ type DrawTool = "select" | "pen" | "highlighter" | "eraser" | "line" | "arrow" |
 type Operation = { tool: DrawTool; color: string; width: number; points: Point[]; text?: string };
 type Bounds = { left: number; top: number; right: number; bottom: number };
 type TextEditor = { x: number; y: number; value: string; editingIndex: number | null };
+type ResizeHandle = "nw" | "ne" | "sw" | "se";
 
 const STORAGE_KEY = "steven-toolbox-whiteboard-v1";
 const colors = ["#111827", "#2563eb", "#7c3aed", "#dc2626", "#ea580c", "#16a34a"];
@@ -33,6 +34,23 @@ function operationBounds(operation: Operation): Bounds {
   return { left: left - padding, top: top - padding, right: right + padding, bottom: bottom + padding };
 }
 
+function groupBounds(operations: Operation[], indices: number[]): Bounds | null {
+  const bounds = indices.map((index) => operations[index]).filter(Boolean).map(operationBounds);
+  if (!bounds.length) return null;
+  return {
+    left: Math.min(...bounds.map((item) => item.left)), top: Math.min(...bounds.map((item) => item.top)),
+    right: Math.max(...bounds.map((item) => item.right)), bottom: Math.max(...bounds.map((item) => item.bottom)),
+  };
+}
+
+function normalizedBounds(start: Point, end: Point): Bounds {
+  return { left: Math.min(start.x, end.x), top: Math.min(start.y, end.y), right: Math.max(start.x, end.x), bottom: Math.max(start.y, end.y) };
+}
+
+function intersects(first: Bounds, second: Bounds) {
+  return first.left <= second.right && first.right >= second.left && first.top <= second.bottom && first.bottom >= second.top;
+}
+
 function cursorFor(tool: DrawTool, hasSelection: boolean) {
   if (tool === "select") return hasSelection ? "move" : "default";
   if (tool === "text") return "text";
@@ -48,14 +66,16 @@ export default function WhiteboardPage() {
   const drawStartSnapshotRef = useRef<Operation[]>([]);
   const pastRef = useRef<Operation[][]>([]);
   const futureRef = useRef<Operation[][]>([]);
-  const selectedIndexRef = useRef(-1);
-  const selectionDragRef = useRef<{ start: Point; originalPoints: Point[]; previous: Operation[]; moved: boolean } | null>(null);
+  const selectedIndicesRef = useRef<number[]>([]);
+  const selectionDragRef = useRef<{ start: Point; originals: Map<number, Point[]>; previous: Operation[]; moved: boolean } | null>(null);
+  const resizeDragRef = useRef<{ handle: ResizeHandle; bounds: Bounds; originals: Map<number, Operation>; previous: Operation[] } | null>(null);
+  const marqueeRef = useRef<{ start: Point; end: Point; additive: boolean } | null>(null);
   const cancelTextRef = useRef(false);
 
   const [tool, setTool] = useState<DrawTool>("pen");
   const [color, setColor] = useState(colors[0]);
   const [width, setWidth] = useState(4);
-  const [selectedIndex, setSelectedIndexState] = useState(-1);
+  const [selectedIndices, setSelectedIndicesState] = useState<number[]>([]);
   const [historyVersion, setHistoryVersion] = useState(0);
   const [textEditor, setTextEditor] = useState<TextEditor | null>(null);
   const [saved, setSaved] = useState(false);
@@ -112,20 +132,30 @@ export default function WhiteboardPage() {
     operationsRef.current.forEach((operation) => drawOperation(context, operation));
     if (currentRef.current) drawOperation(context, currentRef.current);
 
-    const selected = operationsRef.current[selectedIndexRef.current];
-    if (selected) {
-      const bounds = operationBounds(selected);
+    const bounds = groupBounds(operationsRef.current, selectedIndicesRef.current);
+    if (bounds) {
       context.save(); context.strokeStyle = "#2563eb"; context.lineWidth = 1.5; context.setLineDash([6, 4]);
       context.strokeRect(bounds.left - 4, bounds.top - 4, bounds.right - bounds.left + 8, bounds.bottom - bounds.top + 8);
       context.setLineDash([]); context.fillStyle = "#ffffff";
-      [[bounds.left - 4, bounds.top - 4], [bounds.right + 4, bounds.top - 4], [bounds.left - 4, bounds.bottom + 4], [bounds.right + 4, bounds.bottom + 4]].forEach(([x, y]) => { context.fillRect(x - 3, y - 3, 6, 6); context.strokeRect(x - 3, y - 3, 6, 6); });
+      [[bounds.left - 4, bounds.top - 4], [bounds.right + 4, bounds.top - 4], [bounds.left - 4, bounds.bottom + 4], [bounds.right + 4, bounds.bottom + 4]].forEach(([x, y]) => { context.fillRect(x - 5, y - 5, 10, 10); context.strokeRect(x - 5, y - 5, 10, 10); });
+      if (selectedIndicesRef.current.length > 1) {
+        context.fillStyle = "#2563eb"; context.font = "12px ui-sans-serif, system-ui, sans-serif";
+        context.fillText(`${selectedIndicesRef.current.length} items`, bounds.left, bounds.top - 12);
+      }
       context.restore();
+    }
+    if (marqueeRef.current) {
+      const marquee = normalizedBounds(marqueeRef.current.start, marqueeRef.current.end);
+      context.save(); context.fillStyle = "rgba(37, 99, 235, 0.08)"; context.strokeStyle = "#2563eb"; context.lineWidth = 1; context.setLineDash([5, 4]);
+      context.fillRect(marquee.left, marquee.top, marquee.right - marquee.left, marquee.bottom - marquee.top);
+      context.strokeRect(marquee.left, marquee.top, marquee.right - marquee.left, marquee.bottom - marquee.top); context.restore();
     }
   }, [drawOperation]);
 
-  function selectIndex(index: number) {
-    selectedIndexRef.current = index;
-    setSelectedIndexState(index);
+  function setSelection(indices: number[]) {
+    const next = [...new Set(indices)].filter((index) => index >= 0 && index < operationsRef.current.length).sort((first, second) => first - second);
+    selectedIndicesRef.current = next;
+    setSelectedIndicesState(next);
     window.requestAnimationFrame(redraw);
   }
 
@@ -147,7 +177,7 @@ export default function WhiteboardPage() {
     if (!previous) return;
     futureRef.current.push(cloneOperations(operationsRef.current));
     operationsRef.current = previous;
-    selectIndex(-1); persist();
+    setSelection([]); persist();
   }
 
   function redo() {
@@ -155,15 +185,15 @@ export default function WhiteboardPage() {
     if (!next) return;
     pastRef.current.push(cloneOperations(operationsRef.current));
     operationsRef.current = next;
-    selectIndex(-1); persist();
+    setSelection([]); persist();
   }
 
   function deleteSelected() {
-    const index = selectedIndexRef.current;
-    if (index < 0) return;
+    const indices = selectedIndicesRef.current;
+    if (!indices.length) return;
     const previous = cloneOperations(operationsRef.current);
-    operationsRef.current.splice(index, 1);
-    selectIndex(-1); commitChange(previous);
+    [...indices].sort((first, second) => second - first).forEach((index) => operationsRef.current.splice(index, 1));
+    setSelection([]); commitChange(previous);
   }
 
   useEffect(() => {
@@ -191,7 +221,7 @@ export default function WhiteboardPage() {
     const keyboard = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
       if (target.matches("input, textarea")) return;
-      if ((event.key === "Delete" || event.key === "Backspace") && selectedIndexRef.current >= 0) { event.preventDefault(); deleteSelected(); return; }
+      if ((event.key === "Delete" || event.key === "Backspace") && selectedIndicesRef.current.length) { event.preventDefault(); deleteSelected(); return; }
       if (!(event.ctrlKey || event.metaKey)) return;
       if (event.key.toLowerCase() === "z") { event.preventDefault(); undo(); }
       if (event.key.toLowerCase() === "y") { event.preventDefault(); redo(); }
@@ -213,31 +243,84 @@ export default function WhiteboardPage() {
     return -1;
   }
 
+  function resizeHandleAt(point: Point): ResizeHandle | null {
+    const bounds = groupBounds(operationsRef.current, selectedIndicesRef.current);
+    if (!bounds) return null;
+    const handles: Array<[ResizeHandle, Point]> = [
+      ["nw", { x: bounds.left - 4, y: bounds.top - 4 }], ["ne", { x: bounds.right + 4, y: bounds.top - 4 }],
+      ["sw", { x: bounds.left - 4, y: bounds.bottom + 4 }], ["se", { x: bounds.right + 4, y: bounds.bottom + 4 }],
+    ];
+    return handles.find(([, handle]) => Math.abs(point.x - handle.x) <= 10 && Math.abs(point.y - handle.y) <= 10)?.[0] ?? null;
+  }
+
   function startDrawing(event: ReactPointerEvent<HTMLCanvasElement>) {
     const point = pointFromEvent(event);
     if (tool === "select") {
-      const index = hitTest(point); selectIndex(index);
-      if (index >= 0) selectionDragRef.current = { start: point, originalPoints: cloneOperations([operationsRef.current[index]])[0].points, previous: cloneOperations(operationsRef.current), moved: false };
+      event.currentTarget.setPointerCapture(event.pointerId);
+      const handle = resizeHandleAt(point);
+      const bounds = groupBounds(operationsRef.current, selectedIndicesRef.current);
+      if (handle && bounds) {
+        const originals = new Map<number, Operation>();
+        selectedIndicesRef.current.forEach((index) => originals.set(index, cloneOperations([operationsRef.current[index]])[0]));
+        resizeDragRef.current = { handle, bounds, originals, previous: cloneOperations(operationsRef.current) };
+        return;
+      }
+
+      const index = hitTest(point);
+      if (index >= 0) {
+        let next = selectedIndicesRef.current;
+        if (event.shiftKey) next = next.includes(index) ? next.filter((item) => item !== index) : [...next, index];
+        else if (!next.includes(index)) next = [index];
+        setSelection(next);
+        if (next.includes(index)) {
+          const originals = new Map<number, Point[]>();
+          next.forEach((selected) => originals.set(selected, operationsRef.current[selected].points.map((original) => ({ ...original }))));
+          selectionDragRef.current = { start: point, originals, previous: cloneOperations(operationsRef.current), moved: false };
+        }
+      } else {
+        if (!event.shiftKey) setSelection([]);
+        marqueeRef.current = { start: point, end: point, additive: event.shiftKey };
+      }
       return;
     }
     if (tool === "text") {
       return;
     }
     event.currentTarget.setPointerCapture(event.pointerId);
-    selectIndex(-1);
+    setSelection([]);
     drawStartSnapshotRef.current = cloneOperations(operationsRef.current);
     currentRef.current = { tool, color, width: tool === "eraser" ? width * 4 : tool === "highlighter" ? width * 3 : width, points: [point] };
   }
 
   function continueDrawing(event: ReactPointerEvent<HTMLCanvasElement>) {
     const point = pointFromEvent(event);
-    if (tool === "select" && selectionDragRef.current && selectedIndexRef.current >= 0) {
+    if (tool === "select" && resizeDragRef.current) {
+      const drag = resizeDragRef.current;
+      const anchor = {
+        x: drag.handle.includes("w") ? drag.bounds.right : drag.bounds.left,
+        y: drag.handle.includes("n") ? drag.bounds.bottom : drag.bounds.top,
+      };
+      const handleStart = {
+        x: drag.handle.includes("w") ? drag.bounds.left : drag.bounds.right,
+        y: drag.handle.includes("n") ? drag.bounds.top : drag.bounds.bottom,
+      };
+      const scaleX = Math.max(0.15, (point.x - anchor.x) / (handleStart.x - anchor.x || 1));
+      const scaleY = Math.max(0.15, (point.y - anchor.y) / (handleStart.y - anchor.y || 1));
+      const widthScale = (Math.abs(scaleX) + Math.abs(scaleY)) / 2;
+      drag.originals.forEach((original, index) => {
+        operationsRef.current[index].points = original.points.map((originalPoint) => ({ x: anchor.x + (originalPoint.x - anchor.x) * scaleX, y: anchor.y + (originalPoint.y - anchor.y) * scaleY }));
+        operationsRef.current[index].width = Math.max(1, original.width * widthScale);
+      });
+      redraw(); return;
+    }
+    if (tool === "select" && selectionDragRef.current) {
       const drag = selectionDragRef.current;
       const dx = point.x - drag.start.x; const dy = point.y - drag.start.y;
       drag.moved ||= Math.abs(dx) + Math.abs(dy) > 2;
-      operationsRef.current[selectedIndexRef.current].points = drag.originalPoints.map((original) => ({ x: original.x + dx, y: original.y + dy }));
+      drag.originals.forEach((originals, index) => { operationsRef.current[index].points = originals.map((original) => ({ x: original.x + dx, y: original.y + dy })); });
       redraw(); return;
     }
+    if (tool === "select" && marqueeRef.current) { marqueeRef.current.end = point; redraw(); return; }
     if (!currentRef.current) return;
     if (["pen", "highlighter", "eraser"].includes(currentRef.current.tool)) currentRef.current.points.push(point);
     else currentRef.current.points[1] = point;
@@ -245,10 +328,19 @@ export default function WhiteboardPage() {
   }
 
   function finishDrawing() {
+    if (resizeDragRef.current) {
+      const drag = resizeDragRef.current; resizeDragRef.current = null; commitChange(drag.previous); return;
+    }
     if (selectionDragRef.current) {
       const drag = selectionDragRef.current; selectionDragRef.current = null;
       if (drag.moved) commitChange(drag.previous); else redraw();
       return;
+    }
+    if (marqueeRef.current) {
+      const marquee = marqueeRef.current; marqueeRef.current = null;
+      const area = normalizedBounds(marquee.start, marquee.end);
+      const matches = operationsRef.current.map((operation, index) => intersects(area, operationBounds(operation)) ? index : -1).filter((index) => index >= 0);
+      setSelection(marquee.additive ? [...selectedIndicesRef.current, ...matches] : matches); redraw(); return;
     }
     if (!currentRef.current) return;
     operationsRef.current.push(currentRef.current); currentRef.current = null;
@@ -259,14 +351,14 @@ export default function WhiteboardPage() {
     if (tool !== "select") return;
     const index = hitTest(pointFromEvent(event)); const operation = operationsRef.current[index];
     if (!operation || operation.tool !== "text") return;
-    selectIndex(index); cancelTextRef.current = false;
+    setSelection([index]); cancelTextRef.current = false;
     setTextEditor({ x: operation.points[0].x, y: operation.points[0].y, value: operation.text ?? "", editingIndex: index });
   }
 
   function placeText(event: ReactMouseEvent<HTMLCanvasElement>) {
     if (tool !== "text" || textEditor) return;
     const bounds = event.currentTarget.getBoundingClientRect();
-    selectIndex(-1); cancelTextRef.current = false;
+    setSelection([]); cancelTextRef.current = false;
     setTextEditor({ x: event.clientX - bounds.left, y: event.clientY - bounds.top, value: "", editingIndex: null });
   }
 
@@ -277,10 +369,10 @@ export default function WhiteboardPage() {
     const previous = cloneOperations(operationsRef.current);
     if (textEditor.editingIndex === null) {
       operationsRef.current.push({ tool: "text", color, width, points: [{ x: textEditor.x, y: textEditor.y }], text: value });
-      selectIndex(operationsRef.current.length - 1);
+      setSelection([operationsRef.current.length - 1]);
     } else {
       operationsRef.current[textEditor.editingIndex].text = value;
-      selectIndex(textEditor.editingIndex);
+      setSelection([textEditor.editingIndex]);
     }
     setTextEditor(null); commitChange(previous);
   }
@@ -288,7 +380,7 @@ export default function WhiteboardPage() {
   function clearBoard() {
     if (!operationsRef.current.length || !window.confirm("Clear the entire whiteboard?")) return;
     const previous = cloneOperations(operationsRef.current); operationsRef.current = [];
-    selectIndex(-1); commitChange(previous);
+    setSelection([]); commitChange(previous);
   }
 
   function exportPng() {
@@ -299,7 +391,7 @@ export default function WhiteboardPage() {
 
   function chooseTool(nextTool: DrawTool) {
     setTool(nextTool);
-    if (nextTool !== "select") selectIndex(-1);
+    if (nextTool !== "select") setSelection([]);
   }
 
   const tools: Array<{ id: DrawTool; label: string; icon: typeof Pencil }> = [
@@ -314,7 +406,7 @@ export default function WhiteboardPage() {
     <main className="flex h-screen min-h-[620px] flex-col overflow-hidden bg-slate-100 text-slate-900">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3 shadow-sm">
         <div className="flex items-center gap-3"><Link href="/" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100" aria-label="Back to toolbox"><ArrowLeft size={20} /></Link><div><h1 className="font-bold">Quick Whiteboard</h1><p className="text-xs text-slate-500">Local autosave · no account needed {saved && <span className="text-emerald-600">· Saved</span>}</p></div></div>
-        <div className="flex items-center gap-1"><button onClick={undo} disabled={!pastRef.current.length} className="rounded-lg p-2 hover:bg-slate-100 disabled:opacity-30" title="Undo (Ctrl+Z)"><Undo2 size={19} /></button><button onClick={redo} disabled={!futureRef.current.length} className="rounded-lg p-2 hover:bg-slate-100 disabled:opacity-30" title="Redo (Ctrl+Y)"><Redo2 size={19} /></button>{selectedIndex >= 0 && <button onClick={deleteSelected} className="rounded-lg p-2 text-red-600 hover:bg-red-50" title="Delete selected"><Trash2 size={19} /></button>}<button onClick={clearBoard} className="rounded-lg p-2 text-red-600 hover:bg-red-50" title="Clear board"><RotateCcw size={19} /></button><button onClick={exportPng} className="ml-2 flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"><Download size={17} /> Export PNG</button></div>
+        <div className="flex items-center gap-1"><button onClick={undo} disabled={!pastRef.current.length} className="rounded-lg p-2 hover:bg-slate-100 disabled:opacity-30" title="Undo (Ctrl+Z)"><Undo2 size={19} /></button><button onClick={redo} disabled={!futureRef.current.length} className="rounded-lg p-2 hover:bg-slate-100 disabled:opacity-30" title="Redo (Ctrl+Y)"><Redo2 size={19} /></button>{selectedIndices.length > 0 && <button onClick={deleteSelected} className="rounded-lg p-2 text-red-600 hover:bg-red-50" title={`Delete ${selectedIndices.length} selected`}><Trash2 size={19} /></button>}<button onClick={clearBoard} className="rounded-lg p-2 text-red-600 hover:bg-red-50" title="Clear board"><RotateCcw size={19} /></button><button onClick={exportPng} className="ml-2 flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"><Download size={17} /> Export PNG</button></div>
       </header>
 
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
@@ -328,10 +420,10 @@ export default function WhiteboardPage() {
           <div className="absolute left-1/2 top-6 z-10 flex max-w-[calc(100%-2rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white/95 px-3 py-2 shadow-lg backdrop-blur">
             <div className="flex gap-1">{colors.map((item) => <button key={item} onClick={() => setColor(item)} className={`h-6 w-6 rounded-full border-2 ${color === item ? "border-slate-900" : "border-white ring-1 ring-slate-200"}`} style={{ backgroundColor: item }} aria-label={`Use ${item}`} />)}</div>
             <div className="h-6 w-px bg-slate-200" /><label className="flex items-center gap-2 text-xs text-slate-500">{tool === "text" ? "Text size" : "Size"}<input type="range" min="2" max="16" value={width} onChange={(event) => setWidth(Number(event.target.value))} className="w-20" /></label>
-            {tool === "select" && <span className="text-xs text-slate-500">Drag to move · double-click text to edit</span>}
+            {tool === "select" && <span className="text-xs text-slate-500">Drag empty space to select many · Shift-click to add · corner handles resize</span>}
           </div>
           <div ref={wrapperRef} className="relative h-full min-h-[420px] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl shadow-slate-300/40">
-            <canvas ref={canvasRef} onClick={placeText} onPointerDown={startDrawing} onPointerMove={continueDrawing} onPointerUp={finishDrawing} onPointerCancel={finishDrawing} onDoubleClick={editText} className="h-full w-full touch-none" style={{ cursor: cursorFor(tool, selectedIndex >= 0) }} aria-label="Drawing canvas" />
+            <canvas ref={canvasRef} onClick={placeText} onPointerDown={startDrawing} onPointerMove={continueDrawing} onPointerUp={finishDrawing} onPointerCancel={finishDrawing} onDoubleClick={editText} className="h-full w-full touch-none" style={{ cursor: cursorFor(tool, selectedIndices.length > 0) }} aria-label="Drawing canvas" />
             {textEditor && <textarea autoFocus value={textEditor.value} onChange={(event) => setTextEditor({ ...textEditor, value: event.target.value })} onBlur={commitText} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") { cancelTextRef.current = true; setTextEditor(null); } }} placeholder="Type here…" className="absolute z-20 min-h-20 w-64 resize rounded-lg border-2 border-blue-500 bg-white/95 p-2 text-slate-900 shadow-xl outline-none" style={{ left: Math.min(textEditor.x, Math.max(8, (canvasRef.current?.width ?? 320) - 272)), top: Math.max(8, textEditor.y - Math.max(16, width * 5)), fontSize: Math.max(16, width * 5), lineHeight: 1.25 }} />}
           </div>
         </section>
