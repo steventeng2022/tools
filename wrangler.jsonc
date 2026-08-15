@@ -21,6 +21,10 @@
     {
       "binding": "NEXT_INC_CACHE_R2_BUCKET",
       "bucket_name": "tool-opennext-cache"
+    },
+    {
+      "binding": "FILE_SHARES",
+      "bucket_name": "tools-file-shares"
     }
   ],
   "images": {
