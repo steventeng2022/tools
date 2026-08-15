@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import {
   Braces, Clock3, Code2, Diff, FileKey2, Fingerprint, KeyRound, Link as LinkIcon,
-  QrCode, Search, ShieldCheck, UploadCloud,
+  PenTool, QrCode, Search, ShieldCheck, UploadCloud,
 } from "lucide-react";
 
 const groups = [
@@ -30,9 +30,10 @@ const groups = [
     ],
   },
   {
-    name: "Links & Creation",
-    description: "Simple tools for sharing projects and information",
+    name: "Study & Creation",
+    description: "Visual thinking and simple tools for sharing ideas",
     tools: [
+      { name: "Quick Whiteboard", description: "Draw ideas, diagrams, and class notes on an infinite-feeling canvas", icon: PenTool, href: "/whiteboard", accent: "from-pink-500 to-rose-400", badge: "Local" },
       { name: "QR Code Generator", description: "Create customizable QR codes for any URL", icon: QrCode, href: "/qr-generator", accent: "from-green-500 to-emerald-400", badge: "Local" },
       { name: "URL Shortener", description: "Create short, shareable links", icon: LinkIcon, href: "/url-shortener", accent: "from-blue-500 to-indigo-400", badge: "Cloud" },
     ],
