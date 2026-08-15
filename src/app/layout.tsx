@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Developer Tools - Clean & Reliable Online Tools",
-  description: "A clean, ad-free platform with essential developer tools: URL shortener, QR code generator, JSON formatter, Base64 encoder/decoder and more.",
+  title: "Steven's Toolbox - Tools for Students & Developers",
+  description: "Privacy-first, ad-free utilities for students, developers, and security learners, including private file sharing, hash verification, text diff, and more.",
 };
 
 export default function RootLayout({
