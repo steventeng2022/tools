@@ -2,7 +2,7 @@
 
 import { useState, useRef } from "react";
 import ToolLayout from "@/components/ToolLayout";
-import { QrCode, Download, Palette, Type, Smartphone } from "lucide-react";
+import { QrCode, Download, Type, Smartphone } from "lucide-react";
 import QRCode from "qrcode";
 
 export default function QRGenerator() {
@@ -213,9 +213,8 @@ export default function QRGenerator() {
           </button>
         </div>
 
-        {/* QR Code Display */}
-        {qrCodeUrl && (
-          <div className="space-y-6">
+        {/* Keep the canvas mounted so the first generation has a drawing target. */}
+        <div className={qrCodeUrl ? "space-y-6" : "hidden"} aria-hidden={!qrCodeUrl}>
             <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-8">
               <div className="flex flex-col items-center space-y-4">
                 <canvas
@@ -258,8 +257,7 @@ export default function QRGenerator() {
                 </div>
               </div>
             </div>
-          </div>
-        )}
+        </div>
       </div>
     </ToolLayout>
   );
