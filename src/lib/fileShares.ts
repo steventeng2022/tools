@@ -57,6 +57,26 @@ export async function passwordMatches(password: string, salt: string, expected: 
   return difference === 0;
 }
 
+async function fileAccessKey(passwordHash: string) {
+  return crypto.subtle.importKey("raw", hexToBytes(passwordHash), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
+}
+
+export async function createFileAccessToken(id: string, passwordHash: string) {
+  const expiresAt = Date.now() + 60_000;
+  const payload = `${id}.${expiresAt}`;
+  const signature = await crypto.subtle.sign("HMAC", await fileAccessKey(passwordHash), new TextEncoder().encode(payload));
+  return `${expiresAt}.${bytesToHex(new Uint8Array(signature))}`;
+}
+
+export async function fileAccessTokenMatches(token: string, id: string, passwordHash: string) {
+  const [rawExpiry, signature, extra] = token.split(".");
+  if (extra || !/^\d{13}$/.test(rawExpiry) || !/^[a-f0-9]{64}$/.test(signature)) return false;
+  const expiresAt = Number(rawExpiry);
+  if (expiresAt <= Date.now() || expiresAt > Date.now() + 65_000) return false;
+  const payload = new TextEncoder().encode(`${id}.${expiresAt}`);
+  return crypto.subtle.verify("HMAC", await fileAccessKey(passwordHash), hexToBytes(signature), payload);
+}
+
 export function safeFilename(name: string) {
   const cleaned = name.replace(/[\r\n]/g, "").trim();
   return cleaned.slice(0, 180) || "download";

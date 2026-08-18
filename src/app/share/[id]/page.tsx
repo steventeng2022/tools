@@ -25,14 +25,16 @@ export default function SharedFilePage() {
   async function download() {
     setDownloading(true); setMessage("");
     try {
-      const response = await fetch(`/api/files/${id}`, { cache: "no-store", headers: password ? { "X-File-Password": password } : undefined });
-      if (!response.ok) { const data = await response.json(); throw new Error(data.error || "Download failed."); }
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
+      if (metadata?.passwordProtected) {
+        const response = await fetch(`/api/files/${id}`, {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password }),
+        });
+        if (!response.ok) { const data = await response.json(); throw new Error(data.error || "Download failed."); }
+      }
       const anchor = document.createElement("a");
-      anchor.href = url; anchor.download = metadata?.filename ?? "download"; anchor.style.display = "none";
+      anchor.href = `/api/files/${id}`; anchor.download = metadata?.filename ?? "download"; anchor.style.display = "none";
       document.body.appendChild(anchor); anchor.click();
-      window.setTimeout(() => { anchor.remove(); URL.revokeObjectURL(url); }, 1_000);
+      window.setTimeout(() => anchor.remove(), 1_000);
       setPassword(""); setMessage("Download started.");
     } catch (error) { setMessage(error instanceof Error ? error.message : "Download failed."); }
     finally { setDownloading(false); }
