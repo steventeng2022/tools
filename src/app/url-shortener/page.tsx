@@ -1,18 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import ToolLayout from "@/components/ToolLayout";
-import { Link as LinkIcon, Copy, ExternalLink, Calendar, BarChart3 } from "lucide-react";
-import { clsx } from "clsx";
+import { Calendar, Check, Copy, ExternalLink, Link as LinkIcon } from "lucide-react";
 
 interface ShortenedUrl {
-  id: string;
-  originalUrl: string;
-  shortCode: string;
+  code: string;
+  destination: string;
   shortUrl: string;
-  clicks: number;
-  createdAt: Date;
-  expiresAt?: Date;
+  createdAt: number;
+  expiresAt: number | null;
 }
 
 export default function URLShortener() {
@@ -21,220 +18,103 @@ export default function URLShortener() {
   const [expirationDays, setExpirationDays] = useState("");
   const [shortenedUrls, setShortenedUrls] = useState<ShortenedUrl[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [copiedCode, setCopiedCode] = useState<string | null>(null);
+  const [error, setError] = useState("");
 
-  const generateShortCode = () => {
-    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    let result = '';
-    for (let i = 0; i < 6; i++) {
-      result += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return result;
-  };
+  useEffect(() => {
+    const reason = new URLSearchParams(window.location.search).get("error");
+    if (reason === "expired") setError("That short link has expired.");
+    if (reason === "missing") setError("That short link does not exist.");
+  }, []);
 
-  const isValidUrl = (string: string) => {
-    try {
-      new URL(string);
-      return true;
-    } catch {
-      return false;
-    }
-  };
-
-  const handleShorten = async () => {
-    if (!url.trim() || !isValidUrl(url)) {
-      alert("Please enter a valid URL");
-      return;
-    }
-
+  const handleShorten = async (event: FormEvent) => {
+    event.preventDefault();
+    setError("");
     setIsLoading(true);
-
-    // Simulate API call delay
-    await new Promise(resolve => setTimeout(resolve, 1000));
-
-    const shortCode = customCode.trim() || generateShortCode();
-    const baseUrl = typeof window !== 'undefined' ? window.location.origin : 'https://tools.example.com';
-    const shortUrl = `${baseUrl}/${shortCode}`;
-    
-    const expiresAt = expirationDays 
-      ? new Date(Date.now() + parseInt(expirationDays) * 24 * 60 * 60 * 1000)
-      : undefined;
-
-    const newShortenedUrl: ShortenedUrl = {
-      id: Date.now().toString(),
-      originalUrl: url,
-      shortCode,
-      shortUrl,
-      clicks: 0,
-      createdAt: new Date(),
-      expiresAt,
-    };
-
-    setShortenedUrls(prev => [newShortenedUrl, ...prev]);
-    setUrl("");
-    setCustomCode("");
-    setExpirationDays("");
-    setIsLoading(false);
+    try {
+      const response = await fetch("/api/short-urls", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: url.trim(), customCode: customCode.trim(), expirationDays }),
+      });
+      const result = (await response.json()) as ShortenedUrl & { error?: string };
+      if (!response.ok) throw new Error(result.error || "Could not create the short link.");
+      setShortenedUrls((current) => [result, ...current]);
+      setUrl("");
+      setCustomCode("");
+      setExpirationDays("");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not create the short link.");
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const copyToClipboard = async (text: string, id: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopiedId(id);
-      setTimeout(() => setCopiedId(null), 2000);
-    } catch (err) {
-      console.error('Failed to copy: ', err);
-    }
+  const copyToClipboard = async (item: ShortenedUrl) => {
+    await navigator.clipboard.writeText(item.shortUrl);
+    setCopiedCode(item.code);
+    window.setTimeout(() => setCopiedCode(null), 2_000);
   };
 
   return (
-    <ToolLayout
-      title="URL Shortener"
-      description="Create short, shareable links with optional custom codes and expiration dates"
-    >
+    <ToolLayout title="URL Shortener" description="Create real, shareable links with optional custom codes and expiration dates">
       <div className="space-y-8">
-        {/* URL Shortening Form */}
-        <div className="space-y-6">
+        <form className="space-y-6" onSubmit={handleShorten}>
           <div>
-            <label htmlFor="url" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-              Enter URL to shorten
-            </label>
+            <label htmlFor="url" className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">Enter URL to shorten</label>
             <div className="relative">
-              <LinkIcon className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={20} />
-              <input
-                type="url"
-                id="url"
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                placeholder="https://example.com/very/long/url/that/needs/shortening"
-                className="w-full pl-10 pr-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
-              />
+              <LinkIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
+              <input id="url" type="url" required value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://example.com/very/long/url" className="w-full rounded-lg border border-gray-300 bg-white py-3 pl-10 pr-4 text-gray-900 placeholder-gray-500 focus:border-transparent focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400" />
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <div>
-              <label htmlFor="customCode" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Custom short code (optional)
-              </label>
-              <input
-                type="text"
-                id="customCode"
-                value={customCode}
-                onChange={(e) => setCustomCode(e.target.value)}
-                placeholder="my-custom-link"
-                className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
-              />
+              <label htmlFor="customCode" className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">Custom short code (optional)</label>
+              <input id="customCode" type="text" minLength={3} maxLength={32} pattern="[A-Za-z0-9_-]+" value={customCode} onChange={(event) => setCustomCode(event.target.value)} placeholder="my-custom-link" className="w-full rounded-lg border border-gray-300 bg-white px-4 py-3 text-gray-900 placeholder-gray-500 focus:border-transparent focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400" />
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">3–32 letters, numbers, hyphens, or underscores</p>
             </div>
-
             <div>
-              <label htmlFor="expiration" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Expiration (days, optional)
-              </label>
+              <label htmlFor="expiration" className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">Expiration (days, optional)</label>
               <div className="relative">
-                <Calendar className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={20} />
-                <input
-                  type="number"
-                  id="expiration"
-                  value={expirationDays}
-                  onChange={(e) => setExpirationDays(e.target.value)}
-                  placeholder="30"
-                  min="1"
-                  max="365"
-                  className="w-full pl-10 pr-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
-                />
+                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
+                <input id="expiration" type="number" min="1" max="365" value={expirationDays} onChange={(event) => setExpirationDays(event.target.value)} placeholder="30" className="w-full rounded-lg border border-gray-300 bg-white py-3 pl-10 pr-4 text-gray-900 placeholder-gray-500 focus:border-transparent focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400" />
               </div>
             </div>
           </div>
 
-          <button
-            onClick={handleShorten}
-            disabled={!url.trim() || isLoading}
-            className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-semibold py-3 px-6 rounded-lg transition-colors flex items-center justify-center space-x-2"
-          >
-            {isLoading ? (
-              <>
-                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                <span>Shortening...</span>
-              </>
-            ) : (
-              <>
-                <LinkIcon size={20} />
-                <span>Shorten URL</span>
-              </>
-            )}
-          </button>
-        </div>
+          {error && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">{error}</div>}
 
-        {/* Shortened URLs List */}
+          <button type="submit" disabled={!url.trim() || isLoading} className="flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-6 py-3 font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-400">
+            <LinkIcon size={20} />
+            <span>{isLoading ? "Creating link..." : "Shorten URL"}</span>
+          </button>
+        </form>
+
         {shortenedUrls.length > 0 && (
-          <div className="space-y-4">
-            <h3 className="text-xl font-semibold text-gray-900 dark:text-white flex items-center space-x-2">
-              <BarChart3 size={24} />
-              <span>Your Shortened URLs</span>
-            </h3>
-            
-            <div className="space-y-4">
-              {shortenedUrls.map((item) => (
-                <div
-                  key={item.id}
-                  className="border border-gray-200 dark:border-gray-600 rounded-lg p-4 bg-gray-50 dark:bg-gray-700/50"
-                >
-                  <div className="space-y-3">
-                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center space-x-2 mb-1">
-                          <span className="text-lg font-semibold text-blue-600 dark:text-blue-400">
-                            {item.shortUrl}
-                          </span>
-                          <button
-                            onClick={() => copyToClipboard(item.shortUrl, item.id)}
-                            className="text-gray-500 hover:text-blue-600 transition-colors"
-                            title="Copy to clipboard"
-                          >
-                            <Copy size={16} />
-                          </button>
-                          {copiedId === item.id && (
-                            <span className="text-green-600 text-sm">Copied!</span>
-                          )}
-                        </div>
-                        <p className="text-sm text-gray-600 dark:text-gray-300 truncate">
-                          → {item.originalUrl}
-                        </p>
-                      </div>
-                      <div className="flex items-center space-x-4 text-sm text-gray-500 dark:text-gray-400">
-                        <span className="flex items-center space-x-1">
-                          <BarChart3 size={16} />
-                          <span>{item.clicks} clicks</span>
-                        </span>
-                        <a
-                          href={item.originalUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 flex items-center space-x-1"
-                        >
-                          <ExternalLink size={16} />
-                          <span>Visit</span>
-                        </a>
-                      </div>
-                    </div>
-                    
-                    <div className="flex flex-col sm:flex-row sm:justify-between text-xs text-gray-500 dark:text-gray-400 space-y-1 sm:space-y-0">
-                      <span>Created: {item.createdAt.toLocaleDateString()}</span>
-                      {item.expiresAt && (
-                        <span className={clsx(
-                          "font-medium",
-                          item.expiresAt < new Date() ? "text-red-600 dark:text-red-400" : "text-orange-600 dark:text-orange-400"
-                        )}>
-                          {item.expiresAt < new Date() ? "Expired" : `Expires: ${item.expiresAt.toLocaleDateString()}`}
-                        </span>
-                      )}
-                    </div>
+          <section className="space-y-4" aria-labelledby="created-links-title">
+            <h2 id="created-links-title" className="text-xl font-semibold text-gray-900 dark:text-white">Your new short links</h2>
+            {shortenedUrls.map((item) => (
+              <article key={item.code} className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-600 dark:bg-gray-700/50">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <a href={item.shortUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 break-all text-lg font-semibold text-blue-600 hover:underline dark:text-blue-400">
+                      {item.shortUrl}<ExternalLink size={16} className="shrink-0" />
+                    </a>
+                    <p className="mt-1 truncate text-sm text-gray-600 dark:text-gray-300">→ {item.destination}</p>
+                    <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                      Created {new Date(item.createdAt).toLocaleDateString()}
+                      {item.expiresAt ? ` · Expires ${new Date(item.expiresAt).toLocaleDateString()}` : " · No expiration"}
+                    </p>
                   </div>
+                  <button type="button" onClick={() => copyToClipboard(item)} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 dark:border-gray-500 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700">
+                    {copiedCode === item.code ? <Check size={16} /> : <Copy size={16} />}
+                    {copiedCode === item.code ? "Copied" : "Copy link"}
+                  </button>
                 </div>
-              ))}
-            </div>
-          </div>
+              </article>
+            ))}
+          </section>
         )}
       </div>
     </ToolLayout>
