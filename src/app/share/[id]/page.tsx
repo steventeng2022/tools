@@ -29,8 +29,11 @@ export default function SharedFilePage() {
       if (!response.ok) { const data = await response.json(); throw new Error(data.error || "Download failed."); }
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a"); anchor.href = url; anchor.download = metadata?.filename ?? "download"; anchor.click();
-      URL.revokeObjectURL(url);
+      const anchor = document.createElement("a");
+      anchor.href = url; anchor.download = metadata?.filename ?? "download"; anchor.style.display = "none";
+      document.body.appendChild(anchor); anchor.click();
+      window.setTimeout(() => { anchor.remove(); URL.revokeObjectURL(url); }, 1_000);
+      setPassword(""); setMessage("Download started.");
     } catch (error) { setMessage(error instanceof Error ? error.message : "Download failed."); }
     finally { setDownloading(false); }
   }
